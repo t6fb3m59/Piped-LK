@@ -61,6 +61,10 @@ If you have any general questions regarding how Piped works or trouble setting u
 -   You can join us via Matrix at [#piped](https://matrix.to/#/#piped:matrix.org).
 -   You can join us on Lemmy on the [!piped@feddit.rocks](https://feddit.rocks/c/piped) community.
 
+### Docker image
+
+`docker pull logicalkarma/piped-frontend:latest` (multi-arch `linux/amd64`, `linux/arm64`)
+
 ### Self-Hosting
 
 See https://docs.piped.video/docs/self-hosting/ for more details.
