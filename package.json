@@ -54,5 +54,12 @@
     "browserslist": [
         "last 1 chrome version",
         "last 1 firefox version"
-    ]
+    ],
+    "pnpm": {
+        "onlyBuiltDependencies": [
+            "core-js",
+            "esbuild",
+            "vue-demi"
+        ]
+    }
 }
