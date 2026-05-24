@@ -405,6 +405,12 @@ async function setPlayerAttrs(localPlayer, el, uri, mime, shaka) {
                 buffered: "var(--player-buffered)",
                 played: "var(--player-played)",
             },
+            // Disable Shaka's built-in keyboard playback controls — hotkeys-js
+            // below already covers every shortcut. Without this, Shaka's
+            // window-bound keydown listener (added in shaka-player#8962, ships
+            // in v4.16.0+) fires in fullscreen and double-toggles play/pause
+            // with hotkeys-js, canceling the action. Refs: TeamPiped/Piped#4196
+            enableKeyboardPlaybackControls: false,
         };
 
         uiInstance.configure(config);
