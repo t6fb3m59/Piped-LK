@@ -24,7 +24,7 @@ jobs:
               uses: actions/setup-node@v6
               with:
                   cache: "pnpm"
-            - run: pnpm install
+            - run: pnpm install --no-optional
             - run: pnpm build && ./localizefonts.sh && mv dist/ dist-ci/
             - name: Set up QEMU
               uses: docker/setup-qemu-action@v4
