@@ -735,12 +735,15 @@ async function loadVideo() {
             // SABR: build the wrapper MPD now that the player exists, then load it.
             // LuanRT bundle is lazy-imported only when SABR is active so non-SABR
             // users don't pay the bundle cost.
+            let pendingSabrDispose = null;
             if (useSabr) {
                 try {
                     const { setupSabrPlayer } = await import("../utils/sabr/setupSabrPlayer.js");
                     const refreshSession = async () => {
                         const { apiUrl, fetchJson } = await import("@/composables/useApi.js");
-                        const fresh = await fetchJson(apiUrl() + "/streams/" + props.video.id);
+                        const fresh = await fetchJson(apiUrl() + "/streams/" + props.video.id, null, {
+                            cache: "no-store",
+                        });
                         return fresh?.availableModes?.sabr;
                     };
                     const setup = await setupSabrPlayer({
@@ -750,7 +753,7 @@ async function loadVideo() {
                         onRefresh: refreshSession,
                     });
                     uri = setup.manifestUri;
-                    sabrDispose = setup.dispose;
+                    pendingSabrDispose = setup.dispose;
                 } catch (err) {
                     console.error("[SABR] setup failed:", err);
                     error.value = 1;
@@ -759,6 +762,7 @@ async function loadVideo() {
             }
 
             setPlayerAttrs(localPlayer, el, uri, mime, shakaLib);
+            if (pendingSabrDispose) sabrDispose = pendingSabrDispose;
         });
     else setPlayerAttrs(playerInstance, el, uri, mime, shakaLib);
 

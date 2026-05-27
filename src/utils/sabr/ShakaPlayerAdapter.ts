@@ -135,7 +135,7 @@ export class ShakaPlayerAdapter implements SabrPlayerAdapter {
     this.cacheManager = cacheManager;
 
     const networkingEngine = shaka.net.NetworkingEngine;
-    const schemes = [ 'http', 'https' ];
+    const schemes = [ 'http', 'https', 'sabr' ];
 
     if (!shaka.net.HttpFetchPlugin.isSupported())
       throw new Error('The Fetch API is not supported in this browser.');
@@ -481,7 +481,7 @@ export class ShakaPlayerAdapter implements SabrPlayerAdapter {
       return;
 
     this.requestFilter = async (type, request, context) => {
-      if (type !== shaka.net.NetworkingEngine.RequestType.SEGMENT || !isGoogleVideoURL(request.uris[0])) return;
+      if (type !== shaka.net.NetworkingEngine.RequestType.SEGMENT || !request.uris[0].startsWith('sabr://')) return;
 
       const modifiedRequest = await interceptor({
         headers: request.headers,
