@@ -229,7 +229,7 @@ function group_sabr_adaptation_sets(sabrFormats) {
             _id: group.audioTrackId || group.mimeType,
             _mimeType: group.mimeType,
             _startWithSAP: "1",
-            _subsegmentAlignment: "true",
+            _segmentAlignment: "true",
             Representation: group.formats.map(f => generate_sabr_representation(f, group.isVideo)),
         };
         if (group.isVideo) {
@@ -249,7 +249,7 @@ export function generate_sabr_dash_file(sabrFormats, videoLength) {
             _encoding: "utf-8",
             MPD: {
                 _xmlns: "urn:mpeg:dash:schema:mpd:2011",
-                _profiles: "urn:mpeg:dash:profile:isoff-on-demand:2011",
+                _profiles: "urn:mpeg:dash:profile:isoff-live:2011",
                 _minBufferTime: "PT1.5S",
                 _type: "static",
                 _mediaPresentationDuration: `PT${videoLength}S`,
