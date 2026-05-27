@@ -108,6 +108,22 @@
     </PreferenceRow>
     <label
         class="mx-[15vw] my-2 flex items-center justify-between odd:bg-gray-200 max-md:mx-[2vw] dark:odd:bg-dark-800"
+        for="ddlPlaybackEngine"
+    >
+        <strong v-t="'actions.playback_engine'" />
+        <select
+            id="ddlPlaybackEngine"
+            v-model="playbackEngine"
+            class="h-8 w-auto bg-gray-300 text-gray-600 dark:bg-dark-400 dark:text-gray-400"
+            @change="onChange($event)"
+        >
+            <option v-t="'actions.auto'" value="auto" />
+            <option value="sabr">SABR</option>
+            <option value="legacy">Legacy</option>
+        </select>
+    </label>
+    <label
+        class="mx-[15vw] my-2 flex items-center justify-between odd:bg-gray-200 max-md:mx-[2vw] dark:odd:bg-dark-800"
         for="ddlDefaultQuality"
     >
         <strong v-t="'actions.default_quality'" />
@@ -515,6 +531,7 @@ const autoPlayNextCountdown = usePreferenceNumber("autoPlayNextCountdown", 5);
 const listen = usePreferenceBoolean("listen", false);
 const resolutions = [144, 240, 360, 480, 720, 1080, 1440, 2160, 4320];
 const preferHls = usePreferenceBoolean("preferHls", false);
+const playbackEngine = usePreferenceString("playbackEngine", "auto");
 const defaultQuality = usePreferenceNumber("quality", 0);
 const bufferingGoal = usePreferenceNumber("bufferGoal", 10);
 const countryMap = ref(CountryMapDefault);

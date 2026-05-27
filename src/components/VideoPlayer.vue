@@ -127,6 +127,28 @@ let shakaPromise = null;
 let hotkeysPromise = null;
 let lastSelectedTextTrack = null;
 let thumbnailVttUrl = null;
+let sabrDispose = null;
+
+// ─── Backwards-compat accessors ──────────────────────────────────────────────
+// New backend emits playback fields under availableModes.legacy. Old backend
+// emits them at the top level of props.video. These helpers read from the
+// new location and fall back to the old. Use them throughout instead of
+// touching props.video.{audioStreams,videoStreams,dash,hls} directly.
+function getLegacyBlock() {
+    return props.video.availableModes?.legacy ?? props.video;
+}
+function getAudioStreams() {
+    return getLegacyBlock().audioStreams ?? [];
+}
+function getVideoStreams() {
+    return getLegacyBlock().videoStreams ?? [];
+}
+function getDashUrl() {
+    return getLegacyBlock().dash;
+}
+function getHlsUrl() {
+    return getLegacyBlock().hls;
+}
 
 const shouldAutoPlay = computed(() => {
     return getPreferenceBoolean("playerAutoPlay", true) && !props.isEmbed;
@@ -444,8 +466,7 @@ async function setPlayerAttrs(localPlayer, el, uri, mime, shaka) {
     });
 
     const quality = getPreferenceNumber("quality", 0);
-    const qualityConds =
-        quality > 0 && (props.video.audioStreams.length > 0 || props.video.livestream) && !disableVideo;
+    const qualityConds = quality > 0 && (getAudioStreams().length > 0 || props.video.livestream) && !disableVideo;
     if (qualityConds) playerInstance.configure("abr.enabled", false);
 
     const time = route.query.t ?? route.query.start;
@@ -587,10 +608,26 @@ async function loadVideo() {
 
     const noPrevPlayer = !playerInstance;
 
-    var streams = [];
+    // ─── SABR vs Legacy mode resolution ─────────────────────────────────
+    const sabrBlock = props.video.availableModes?.sabr;
+    const defaultMode = props.video.defaultMode || "legacy";
+    const playbackEnginePref = getPreferenceString("playbackEngine", "auto");
 
-    streams.push(...props.video.audioStreams);
-    streams.push(...props.video.videoStreams);
+    let useSabr = false;
+    if (sabrBlock) {
+        if (playbackEnginePref === "sabr") useSabr = true;
+        else if (playbackEnginePref === "legacy") useSabr = false;
+        else useSabr = defaultMode === "sabr"; // "auto"
+    }
+
+    const audioStreams = getAudioStreams();
+    const videoStreams = getVideoStreams();
+    const dashUrl = getDashUrl();
+    const hlsUrl = getHlsUrl();
+
+    var streams = [];
+    streams.push(...audioStreams);
+    streams.push(...videoStreams);
 
     const MseSupport = window.MediaSource !== undefined || window.ManagedMediaSource !== undefined;
 
@@ -599,16 +636,16 @@ async function loadVideo() {
     var uri;
     var mime;
 
-    if (props.video.livestream) {
-        uri = props.video.hls;
+    if (useSabr) {
+        // SABR path: the manifestUri is built inside the shaka promise callback
+        // below, after Shaka attaches (LuanRT needs the player instance to
+        // register its request/response interceptors). Only mime is set here.
+        mime = "application/dash+xml";
+    } else if (props.video.livestream) {
+        uri = hlsUrl;
         mime = "application/x-mpegURL";
-    } else if (
-        props.video.audioStreams.length > 0 &&
-        !lbry &&
-        MseSupport &&
-        !getPreferenceBoolean("preferHls", false)
-    ) {
-        if (!props.video.dash) {
+    } else if (audioStreams.length > 0 && !lbry && MseSupport && !getPreferenceBoolean("preferHls", false)) {
+        if (!dashUrl) {
             const dash = (await import("../utils/DashUtils.js")).generate_dash_file_from_formats(
                 streams,
                 props.video.duration,
@@ -616,7 +653,7 @@ async function loadVideo() {
 
             uri = "data:application/dash+xml;charset=utf-8;base64," + btoa(dash);
         } else {
-            const url = new URL(props.video.dash);
+            const url = new URL(dashUrl);
             url.searchParams.set("rewrite", false);
             uri = url.toString();
         }
@@ -644,14 +681,14 @@ async function loadVideo() {
             return response.headers.get("Content-Type");
         });
         mime = contentType;
-    } else if (props.video.dash && !getPreferenceBoolean("preferHls", false)) {
-        uri = props.video.dash;
+    } else if (dashUrl && !getPreferenceBoolean("preferHls", false)) {
+        uri = dashUrl;
         mime = "application/dash+xml";
-    } else if (props.video.hls) {
-        uri = props.video.hls;
+    } else if (hlsUrl) {
+        uri = hlsUrl;
         mime = "application/x-mpegURL";
     } else {
-        uri = props.video.videoStreams.findLast(stream => stream.codec == null).url;
+        uri = videoStreams.findLast(stream => stream.codec == null).url;
         mime = "video/mp4";
     }
 
@@ -695,6 +732,32 @@ async function loadVideo() {
             localPlayer.configure("streaming.bufferingGoal", Math.max(getPreferenceNumber("bufferGoal", 10), 10));
             localPlayer.configure("streaming.bufferBehind", 300);
 
+            // SABR: build the wrapper MPD now that the player exists, then load it.
+            // LuanRT bundle is lazy-imported only when SABR is active so non-SABR
+            // users don't pay the bundle cost.
+            if (useSabr) {
+                try {
+                    const { setupSabrPlayer } = await import("../utils/sabr/setupSabrPlayer.js");
+                    const refreshSession = async () => {
+                        const { apiUrl, fetchJson } = await import("@/composables/useApi.js");
+                        const fresh = await fetchJson(apiUrl() + "/streams/" + props.video.id);
+                        return fresh?.availableModes?.sabr;
+                    };
+                    const setup = await setupSabrPlayer({
+                        shakaPlayer: localPlayer,
+                        sabr: sabrBlock,
+                        duration: props.video.duration,
+                        onRefresh: refreshSession,
+                    });
+                    uri = setup.manifestUri;
+                    sabrDispose = setup.dispose;
+                } catch (err) {
+                    console.error("[SABR] setup failed:", err);
+                    error.value = 1;
+                    return;
+                }
+            }
+
             setPlayerAttrs(localPlayer, el, uri, mime, shakaLib);
         });
     else setPlayerAttrs(playerInstance, el, uri, mime, shakaLib);
@@ -733,6 +796,14 @@ async function loadVideo() {
 }
 
 function destroy(hotkeys) {
+    if (sabrDispose) {
+        try {
+            sabrDispose();
+        } catch (e) {
+            console.warn("[SABR] dispose error:", e);
+        }
+        sabrDispose = null;
+    }
     if (thumbnailVttUrl) {
         URL.revokeObjectURL(thumbnailVttUrl);
         thumbnailVttUrl = null;

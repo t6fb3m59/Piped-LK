@@ -165,6 +165,7 @@
         "playback_speed": "Playback speed",
         "invalid_input": "Invalid input",
         "prefer_hls": "Prefer HLS over DASH",
+        "playback_engine": "Playback engine",
         "export_history": "Export history",
         "import_history": "Import history",
         "file_format": "File format",
