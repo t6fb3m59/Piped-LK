@@ -170,17 +170,18 @@ function base_mime(mimeType) {
 function generate_sabr_representation(format, isVideo) {
     const key = sabrFormatKey(format);
     const codec = extract_codec_from_mime(format.mimeType);
-    const baseURL = `sabr://${isVideo ? "video" : "audio"}?key=${encodeURIComponent(key)}`;
+    const sabrRoot = `sabr://${isVideo ? "video" : "audio"}`;
+    const keyParam = `key=${encodeURIComponent(key)}`;
     const duration = isVideo ? SABR_VIDEO_SEGMENT_DURATION_MS : SABR_AUDIO_SEGMENT_DURATION_MS;
 
     const representation = {
         _id: String(format.itag),
         _codecs: codec,
         _bandwidth: format.bitrate,
-        BaseURL: baseURL,
+        BaseURL: `${sabrRoot}?${keyParam}`,
         SegmentTemplate: {
-            _media: "$Number$",
-            _initialization: "$Number$",
+            _media: `${sabrRoot}?${keyParam}&sq=$Number$`,
+            _initialization: `${sabrRoot}?${keyParam}&init=1`,
             _startNumber: "0",
             _duration: String(duration),
             _timescale: "1000",
