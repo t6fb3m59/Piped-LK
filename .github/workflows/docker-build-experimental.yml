@@ -1,0 +1,52 @@
+name: Docker Multi-Architecture Build (Experimental)
+
+# Builds the experimental piped-frontend image, pushed to `:experimental`
+# so the production `:latest` served by master stays untouched.
+# Mirrors docker-build.yml otherwise.
+
+on:
+    push:
+        paths-ignore:
+            - "**.md"
+        branches:
+            - experimental
+
+jobs:
+    build-docker-image:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v6
+            - name: Setup pnpm
+              uses: pnpm/action-setup@v5
+              with:
+                  version: 9
+            - name: Setup Node.js
+              uses: actions/setup-node@v6
+              with:
+                  cache: "pnpm"
+            - run: pnpm install
+            - run: pnpm build && ./localizefonts.sh && mv dist/ dist-ci/
+            - name: Set up QEMU
+              uses: docker/setup-qemu-action@v4
+              with:
+                  platforms: all
+            - name: Set up Docker Buildx
+              id: buildx
+              uses: docker/setup-buildx-action@v4
+              with:
+                  version: latest
+            - name: Login to DockerHub
+              uses: docker/login-action@v4
+              with:
+                  username: ${{ secrets.DOCKER_USERNAME }}
+                  password: ${{ secrets.DOCKER_PASSWORD }}
+            - name: Build and push experimental
+              uses: docker/build-push-action@v7
+              with:
+                  context: .
+                  file: ./Dockerfile.ci
+                  platforms: linux/amd64,linux/arm64
+                  push: true
+                  tags: logicalkarma/piped-frontend:experimental
+                  cache-from: type=gha
+                  cache-to: type=gha,mode=max
