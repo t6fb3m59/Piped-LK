@@ -10,7 +10,7 @@ Images are published to Docker Hub under `logicalkarma/`:
 | --- | --- | --- |
 | Frontend | `logicalkarma/piped-frontend:latest` | `logicalkarma/piped-frontend:experimental` |
 | Backend | `logicalkarma/piped:latest` | `logicalkarma/piped:experimental` |
-| Proxy | `logicalkarma/piped-proxy:experimental` | `logicalkarma/piped-proxy:experimental` |
+| Proxy | `logicalkarma/piped-proxy:latest` | `logicalkarma/piped-proxy:experimental` |
 
 All are multi-arch (`linux/amd64`, `linux/arm64`).
 
