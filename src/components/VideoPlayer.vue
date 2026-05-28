@@ -349,7 +349,7 @@ async function updateProgressDatabase(time) {
     if (new Date().getTime() - lastUpdate.value < 500) return;
     lastUpdate.value = new Date().getTime();
 
-    if (!initialSeekComplete.value || !props.video.id || !window.db) return;
+    if (!initialSeekComplete.value || destroying.value || !props.video.id || !window.db) return;
 
     var tx = window.db.transaction("watch_history", "readwrite");
     var store = tx.objectStore("watch_history");
