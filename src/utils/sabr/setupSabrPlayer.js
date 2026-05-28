@@ -48,7 +48,7 @@ document.head.appendChild(spinnerSuppressStyle);
  *   availableModes.sabr block (new sessionUrl/ustreamerConfig) for an in-place
  *   session refresh when the SABR server demands a reload
  * @param {() => void} [args.onReloadFailed] called when the in-place refresh
- *   can't recover; caller should do a full player rebuild
+ *   has retried for RELOAD_GIVE_UP_MS without recovering; caller should surface a terminal error
  * @returns {{ manifestUri: string, dispose: () => void, onLoaded: () => void }}
  */
 export function setupSabrPlayer({
@@ -113,20 +113,18 @@ export function setupSabrPlayer({
         console.log(`[SABR] backoff requested: ${Math.round(backoffMs)}ms`);
     });
 
-    // On a SABR reload, swap in a fresh session in place and resume — no
-    // teardown, no seek, buffered media keeps playing. Re-arm after each
-    // success since onReloadOnce only fires once. If anything fails, hand off
-    // to the caller for a full player rebuild.
-    //
-    // A flat 1s delay before each attempt keeps a persistently-failing session
-    // (e.g. a transient backend/YouTube outage) from turning into a request
-    // storm — the reload loop is otherwise ungated and fires as fast as
-    // /streams responds.
-    const RELOAD_BACKOFF_MS = 1000;
-    const armReload = () => {
-        sabrStream.onReloadOnce?.(async () => {
-            console.log("[SABR] session reload requested");
-            await new Promise(resolve => setTimeout(resolve, RELOAD_BACKOFF_MS));
+    let disposed = false;
+    const RELOAD_INTERVAL_MS = 1000;
+    const RELOAD_GIVE_UP_MS = 120000;
+    let reloading = false;
+
+    const runReload = async () => {
+        if (reloading) return;
+        reloading = true;
+        const startedAt = Date.now();
+        while (!disposed) {
+            await new Promise(resolve => setTimeout(resolve, RELOAD_INTERVAL_MS));
+            if (disposed) break;
             try {
                 const fresh = fetchFreshSabr ? await fetchFreshSabr() : null;
                 if (!fresh?.sessionUrl) throw new Error("no fresh SABR session");
@@ -134,12 +132,27 @@ export function setupSabrPlayer({
                     sessionUrl: fresh.sessionUrl,
                     ustreamerConfig: fresh.ustreamerConfig,
                 });
+                reloading = false;
                 armReload();
                 shakaPlayer.retryStreaming?.();
+                return;
             } catch (e) {
-                console.warn("[SABR] in-place session refresh failed, requesting full reload:", e);
-                if (onReloadFailed) onReloadFailed();
+                if (Date.now() - startedAt >= RELOAD_GIVE_UP_MS) {
+                    console.warn(`[SABR] session refresh failed for ${RELOAD_GIVE_UP_MS}ms, giving up:`, e);
+                    reloading = false;
+                    if (onReloadFailed) onReloadFailed();
+                    return;
+                }
+                console.warn("[SABR] session refresh failed, retrying in 1s:", e);
             }
+        }
+        reloading = false;
+    };
+
+    const armReload = () => {
+        sabrStream.onReloadOnce?.(() => {
+            console.log("[SABR] session reload requested");
+            runReload();
         });
     };
     armReload();
@@ -164,6 +177,7 @@ export function setupSabrPlayer({
     };
 
     const dispose = () => {
+        disposed = true;
         videoEl?.removeEventListener("timeupdate", onTimeUpdate);
         sabrContainer?.removeAttribute("data-sabr-near-end");
         try {

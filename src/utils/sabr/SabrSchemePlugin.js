@@ -417,8 +417,11 @@ async function doRequest(operationInputs, currentState) {
                         const sabrRedirect = decodePart(part, SabrRedirect);
                         if (!sabrRedirect) break;
 
-                        currentState.sabrUrl = sabrRedirect.url;
-                        shouldRetry = true;
+                        currentState.sabrStreamState.playerReloadRequested = true;
+                        if (!currentState.abortController.signal.aborted) {
+                            currentState.abortController.abort();
+                            currentState.eventEmitter.emit("reload");
+                        }
                         break;
                     }
                     case UMPPartId.MEDIA_HEADER: {

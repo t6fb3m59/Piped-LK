@@ -748,7 +748,9 @@ async function loadVideo() {
                             const data = await fetchJson(apiUrl() + "/streams/" + props.video.id);
                             return data?.availableModes?.sabr;
                         },
-                        onReloadFailed: () => emit("needsReload"),
+                        onReloadFailed: () => {
+                            error.value = 1;
+                        },
                     });
                     uri = setup.manifestUri;
                     pendingSabrDispose = setup.dispose;
