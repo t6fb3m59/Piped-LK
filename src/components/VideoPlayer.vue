@@ -326,7 +326,7 @@ async function updateProgressDatabase(time) {
     if (new Date().getTime() - lastUpdate.value < 500) return;
     lastUpdate.value = new Date().getTime();
 
-    if (!initialSeekComplete.value || !props.video.id || !window.db) return;
+    if (!initialSeekComplete.value || destroying.value || !props.video.id || !window.db) return;
 
     var tx = window.db.transaction("watch_history", "readwrite");
     var store = tx.objectStore("watch_history");
@@ -476,6 +476,7 @@ async function setPlayerAttrs(localPlayer, el, uri, mime, shaka) {
     playerInstance
         .load(uri, startTime, mime)
         .then(async () => {
+            if (startTime > 0) el.currentTime = startTime;
             let lang = "en";
             const prefLang = getPreferenceString("hl", "en").substr(0, 2);
             const audioTracks = playerInstance.getAudioTracks();
@@ -573,6 +574,8 @@ async function setPlayerAttrs(localPlayer, el, uri, mime, shaka) {
 }
 
 async function loadVideo() {
+    initialSeekComplete.value = false;
+
     updateSponsors();
 
     const el = videoEl.value;
