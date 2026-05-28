@@ -697,7 +697,7 @@ export function setupSabrScheme(sabrData, getPlayer, getManifest, playerWidth, p
     const initDataCache = new Map();
 
     const poToken = base64ToU8(sabrData.poToken);
-    const videoPlaybackUstreamerConfig = base64ToU8(sabrData.ustreamerConfig);
+    let videoPlaybackUstreamerConfig = base64ToU8(sabrData.ustreamerConfig);
     const clientInfo = deepCopy(sabrData.clientInfo);
 
     /** @type {SabrStreamState} */
@@ -931,6 +931,22 @@ export function setupSabrScheme(sabrData, getPlayer, getManifest, playerWidth, p
         initDataCache.clear();
     };
 
+    // Swap in renewed session credentials without rebuilding the player. The
+    // Shaka manifest, segment indices, and buffered media stay intact; only the
+    // dead session URL + ustreamer config are replaced and the reload/backoff
+    // state is reset so requests can resume. Caller follows with
+    // player.retryStreaming() to re-drive the last failed fetch.
+    const refreshSession = ({ sessionUrl, ustreamerConfig }) => {
+        sabrStreamState.sabrUrl = sessionUrl;
+        sabrStreamState.playerReloadRequested = false;
+        sabrStreamState.nextRequestPolicy = undefined;
+        sabrStreamState.activeSabrContextTypes.clear();
+        sabrStreamState.sabrContexts.clear();
+        sabrStreamState.requestNumber = 0;
+        if (ustreamerConfig) videoPlaybackUstreamerConfig = base64ToU8(ustreamerConfig);
+        initDataCache.clear();
+    };
+
     return {
         onBackoffRequested(callback) {
             eventEmitter.on("backoff-requested", callback);
@@ -938,6 +954,7 @@ export function setupSabrScheme(sabrData, getPlayer, getManifest, playerWidth, p
         onReloadOnce(callback) {
             eventEmitter.once("reload", callback);
         },
+        refreshSession,
         cleanup,
     };
 }

@@ -473,21 +473,23 @@ function fetchVideo() {
     return fetchJson(apiUrl() + "/streams/" + getVideoId());
 }
 
-// Mirrors FreeTube's onPlayerReloadRequested: the SABR server has invalidated our
-// session (cpn/ustreamerConfig TTL expired), so refetch /streams to get a fresh one
-// and rebuild the player. Preserve playback position via the URL's t= param so
-// VideoPlayer's existing startTime logic picks it up.
+// Fallback path for when the SABR in-place session refresh can't recover (e.g.
+// the format list changed mid-session, so the cached manifest is stale). Unlike
+// the smooth refresh, this fully rebuilds the player, so we preserve position
+// via the reactive route query (VideoPlayer's startTime logic reads route.query.t)
+// and destroy the old player first so loadVideo takes its full-rebuild path.
 async function onPlayerReloadRequested() {
     const resumeAt = Math.floor(currentTime.value);
-    if (resumeAt > 0) {
-        const url = new URL(window.location);
-        url.searchParams.set("t", String(resumeAt));
-        window.history.replaceState({}, "", url);
-    }
     const data = await fetchVideo();
     video.value = data;
     video.value.id = getVideoId();
-    if (videoPlayer.value) videoPlayer.value.loadVideo();
+    if (resumeAt > 0) {
+        await router.replace({ path: route.path, query: { ...route.query, t: resumeAt } });
+    }
+    if (videoPlayer.value) {
+        videoPlayer.value.destroy();
+        videoPlayer.value.loadVideo();
+    }
 }
 
 async function fetchSponsors() {

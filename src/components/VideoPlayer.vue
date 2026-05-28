@@ -72,6 +72,7 @@ import { useRoute } from "vue-router";
 import { useI18n } from "vue-i18n";
 import { parseTimeParam } from "@/utils/Misc";
 import ModalComponent from "./ModalComponent.vue";
+import { apiUrl, fetchJson } from "@/composables/useApi.js";
 import {
     getPreferenceBoolean,
     getPreferenceNumber,
@@ -740,7 +741,11 @@ async function loadVideo() {
                         sabr: sabrBlock,
                         duration: props.video.duration,
                         captions: props.video.subtitles || [],
-                        onReloadRequested: () => emit("needsReload"),
+                        fetchFreshSabr: async () => {
+                            const data = await fetchJson(apiUrl() + "/streams/" + props.video.id);
+                            return data?.availableModes?.sabr;
+                        },
+                        onReloadFailed: () => emit("needsReload"),
                     });
                     uri = setup.manifestUri;
                     pendingSabrDispose = setup.dispose;

@@ -44,10 +44,22 @@ document.head.appendChild(spinnerSuppressStyle);
  * @param {number} args.duration top-level video duration in seconds
  * @param {Array} [args.captions] caption tracks
  * @param {Array} [args.storyboards] storyboard tracks
- * @param {() => void} [args.onReloadRequested] fired when the SABR server demands a player reload
+ * @param {() => Promise<object|undefined>} [args.fetchFreshSabr] resolves a fresh
+ *   availableModes.sabr block (new sessionUrl/ustreamerConfig) for an in-place
+ *   session refresh when the SABR server demands a reload
+ * @param {() => void} [args.onReloadFailed] called when the in-place refresh
+ *   can't recover; caller should do a full player rebuild
  * @returns {{ manifestUri: string, dispose: () => void, onLoaded: () => void }}
  */
-export function setupSabrPlayer({ shakaPlayer, sabr, duration, captions = [], storyboards = [], onReloadRequested }) {
+export function setupSabrPlayer({
+    shakaPlayer,
+    sabr,
+    duration,
+    captions = [],
+    storyboards = [],
+    fetchFreshSabr,
+    onReloadFailed,
+}) {
     const sabrData = {
         url: sabr.sessionUrl,
         poToken: "",
@@ -101,10 +113,29 @@ export function setupSabrPlayer({ shakaPlayer, sabr, duration, captions = [], st
         console.log(`[SABR] backoff requested: ${Math.round(backoffMs)}ms`);
     });
 
-    sabrStream.onReloadOnce?.(() => {
-        console.log("[SABR] server requested player reload");
-        if (onReloadRequested) onReloadRequested();
-    });
+    // On a SABR reload, swap in a fresh session in place and resume — no
+    // teardown, no seek, buffered media keeps playing. Re-arm after each
+    // success since onReloadOnce only fires once. If anything fails, hand off
+    // to the caller for a full player rebuild.
+    const armReload = () => {
+        sabrStream.onReloadOnce?.(async () => {
+            console.log("[SABR] session reload requested");
+            try {
+                const fresh = fetchFreshSabr ? await fetchFreshSabr() : null;
+                if (!fresh?.sessionUrl) throw new Error("no fresh SABR session");
+                sabrStream.refreshSession?.({
+                    sessionUrl: fresh.sessionUrl,
+                    ustreamerConfig: fresh.ustreamerConfig,
+                });
+                armReload();
+                shakaPlayer.retryStreaming?.();
+            } catch (e) {
+                console.warn("[SABR] in-place session refresh failed, requesting full reload:", e);
+                if (onReloadFailed) onReloadFailed();
+            }
+        });
+    };
+    armReload();
 
     // See spinnerSuppressStyle above for why. Toggle attribute on each timeupdate
     // (includes the final tick before `ended` fires, so no need for a separate
