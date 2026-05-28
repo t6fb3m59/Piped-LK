@@ -506,6 +506,7 @@ async function setPlayerAttrs(localPlayer, el, uri, mime, shaka, sabrOnLoaded) {
     playerInstance
         .load(uri, startTime, mime)
         .then(async () => {
+            if (startTime > 0) el.currentTime = startTime;
             if (sabrOnLoaded) sabrOnLoaded();
             // Languages may arrive as bare ("en") or BCP-47 ("en-US"); compare on the
             // first 2 chars on both sides so prefs like "en" match "en-US" tracks.
@@ -594,6 +595,8 @@ async function setPlayerAttrs(localPlayer, el, uri, mime, shaka, sabrOnLoaded) {
 }
 
 async function loadVideo() {
+    initialSeekComplete.value = false;
+
     updateSponsors();
 
     const el = videoEl.value;

@@ -109,11 +109,12 @@ function onChange() {
     setPreference("autoDeleteWatchHistoryDelayHours", autoDeleteDelayHours.value);
 }
 
-onMounted(() => {
-    autoDeleteHistory.value = getPreferenceBoolean("autoDeleteWatchHistory", false);
-    autoDeleteDelayHours.value = getPreferenceString("autoDeleteWatchHistoryDelayHours", "24");
+function loadHistory() {
+    videosStore.length = 0;
+    currentVideoCount = 0;
+    videos.value = [];
 
-    (async () => {
+    return (async () => {
         if (window.db && getPreferenceBoolean("watchHistory", false)) {
             var tx = window.db.transaction("watch_history", "readwrite");
             var store = tx.objectStore("watch_history");
@@ -148,10 +149,16 @@ onMounted(() => {
     })().then(() => {
         loadMoreVideos();
     });
+}
+
+onMounted(() => {
+    autoDeleteHistory.value = getPreferenceBoolean("autoDeleteWatchHistory", false);
+    autoDeleteDelayHours.value = getPreferenceString("autoDeleteWatchHistoryDelayHours", "24");
 });
 
 onActivated(() => {
     document.title = "Watch History - Piped";
+    loadHistory();
     window.addEventListener("scroll", handleScroll);
 });
 
