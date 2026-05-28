@@ -1,3 +1,64 @@
+# Piped-LK
+
+A personal fork of [Piped](#piped) (upstream README preserved below). This fork will either be integrated upstream or made into a fully fledged fork at a later date. I am struggling to decide which is better/ possible and do not have time at the moment for either.
+
+## Where to find the images
+
+Images are published to Docker Hub under `logicalkarma/`:
+
+| Component | `latest` (stable) | `experimental` |
+| --- | --- | --- |
+| Frontend | `logicalkarma/piped-frontend:latest` | `logicalkarma/piped-frontend:experimental` |
+| Backend | `logicalkarma/piped:latest` | `logicalkarma/piped:experimental` |
+| Proxy | `logicalkarma/piped-proxy:experimental` | `logicalkarma/piped-proxy:experimental` |
+
+All are multi-arch (`linux/amd64`, `linux/arm64`).
+
+## What each tag is for
+
+- **`latest`** tracks upstream Piped closely — only tame or genuinely-needed
+  changes on top of upstream, nothing experimental.
+- **`experimental`** is where SABR (YouTube's Server-Adaptive BitRate
+  streaming) is being implemented. This branch leans **heavily on Claude** for
+  implementation, updates frequently, and may break without warning. That
+  said, **SABR is currently usable** on it.
+
+## What is SABR?
+
+SABR (Server-Adaptive BitRate) is YouTube's newer streaming protocol. Instead
+of handing clients a plain URL for each audio/video stream (the way Piped has
+historically fetched media), the server now drives playback over a stateful
+session: the client asks for ranges and the server decides what media chunks
+to send back, in a custom binary wire format.
+
+YouTube has been progressively forcing clients onto SABR. Without support for
+it, the only stream that still plays is **itag 18** — the legacy "progressive"
+format: a single combined audio+video MP4 capped at **360p**. So on a client
+that can't do SABR, the user sees every video locked to 360p with no higher
+resolutions in the quality menu, regardless of what the video actually offers.
+
+Implementing SABR is what restores full quality selection (720p, 1080p, 4K,
+separate audio tracks, etc.) as YouTube tightens this transition — hence the
+`experimental` branch.
+
+## Credits
+
+The SABR implementation here stands on the shoulders of the projects that
+pioneered FOSS SABR support — huge thanks to them:
+
+- **[FreeTube](https://github.com/FreeTubeApp/FreeTube)** (MIT) — the SABR
+  manifest parser, Shaka scheme plugin, and MP4/WebM segment-index parsers
+  under [`src/utils/sabr/`](src/utils/sabr/) are vendored from FreeTube with
+  minor local adaptations. Attribution headers are kept in each file.
+- **[googlevideo](https://github.com/LuanRT/googlevideo)** by **LuanRT** — the
+  library that actually speaks YouTube's UMP/SABR wire protocol; everything
+  above builds on it.
+
+Without their groundwork, SABR playback in an alternative frontend wouldn't be
+possible. Thank you for doing the hard part in the open.
+
+---
+
 # Piped
 
 [![AGPL v3](https://shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0.en.html)
