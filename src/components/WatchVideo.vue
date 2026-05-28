@@ -7,6 +7,7 @@
             :selected-auto-play="false"
             :selected-auto-loop="selectedAutoLoop"
             :is-embed="isEmbed"
+            @needs-reload="onPlayerReloadRequested"
         />
     </div>
     <div id="theaterModeSpot" class="-mx-[1vw]"></div>
@@ -31,6 +32,7 @@
                                 @timeupdate="onTimeUpdate"
                                 @ended="onVideoEnded"
                                 @navigate-next="navigateNext"
+                                @needs-reload="onPlayerReloadRequested"
                             />
                         </keep-alive>
                         <button
@@ -469,6 +471,23 @@ const youtubeVideoHref = computed(() => {
 
 function fetchVideo() {
     return fetchJson(apiUrl() + "/streams/" + getVideoId());
+}
+
+// Mirrors FreeTube's onPlayerReloadRequested: the SABR server has invalidated our
+// session (cpn/ustreamerConfig TTL expired), so refetch /streams to get a fresh one
+// and rebuild the player. Preserve playback position via the URL's t= param so
+// VideoPlayer's existing startTime logic picks it up.
+async function onPlayerReloadRequested() {
+    const resumeAt = Math.floor(currentTime.value);
+    if (resumeAt > 0) {
+        const url = new URL(window.location);
+        url.searchParams.set("t", String(resumeAt));
+        window.history.replaceState({}, "", url);
+    }
+    const data = await fetchVideo();
+    video.value = data;
+    video.value.id = getVideoId();
+    if (videoPlayer.value) videoPlayer.value.loadVideo();
 }
 
 async function fetchSponsors() {

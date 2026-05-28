@@ -1,91 +1,139 @@
 // Entry point for the SABR playback path. Lazy-loaded by VideoPlayer.vue
-// only when a video's availableModes.sabr block is selected, so non-SABR
-// users don't download the LuanRT bundle.
+// only when a video's availableModes.sabr block is selected.
 //
-// Returns the wrapper-MPD data: URI + a teardown function the caller
-// can use to dispose the adapter when the video unloads.
+// FreeTube-style: we build a SabrManifest JSON, hand it to Shaka as
+// `data:application/sabr+json,...`, and the vendored SabrManifestParser +
+// SabrSchemePlugin take over from there. See ./SabrManifestParser.js and
+// ./SabrSchemePlugin.js for the heavy lifting (both vendored from
+// https://github.com/FreeTubeApp/FreeTube, MIT licensed).
+//
+// Returns { manifestUri, dispose, onLoaded }:
+//   - manifestUri: data: URL to hand to shaka.Player.load(uri)
+//   - dispose: teardown (call on unmount)
+//   - onLoaded: must be called by the caller AFTER player.load() resolves so
+//     the SabrSchemePlugin can read the parsed shaka manifest for bufferedRange
+//     calculations on subsequent segment fetches
 
-import { SabrStreamingAdapter } from "googlevideo/sabr-streaming-adapter";
-import { ShakaPlayerAdapter } from "./ShakaPlayerAdapter.ts";
-import { generate_sabr_dash_file } from "../DashUtils.js";
+import { MANIFEST_TYPE_SABR } from "./SabrManifestParser.js";
+// Side-effect import: SabrManifestParser registers itself with Shaka at module load.
+import "./SabrManifestParser.js";
+import { setupSabrScheme } from "./SabrSchemePlugin.js";
+
+// Mimics the YT Music Android client identity Piped's backend already uses
+// when extracting via NPE — must stay in sync so the SABR server treats
+// player requests as coming from the same client that established the session.
+const ANDROID_CLIENT_INFO = {
+    clientName: 3,
+    clientVersion: "21.03.36",
+    osName: "Android",
+    osVersion: "15",
+};
+
+// Suppress Shaka's buffering spinner in the last ~second of SABR playback —
+// audio/video tracks differ slightly in length, so Shaka's BufferingObserver
+// briefly thinks we're buffering at the end. Toggled per-player by attribute.
+const spinnerSuppressStyle = document.createElement("style");
+spinnerSuppressStyle.textContent =
+    "[data-shaka-player-container][data-sabr-near-end] .shaka-spinner-container{display:none}";
+document.head.appendChild(spinnerSuppressStyle);
 
 /**
  * @param {object} args
- * @param {object} args.shakaPlayer - already-attached shaka.Player instance
- * @param {object} args.sabr - response.availableModes.sabr (sessionUrl, ustreamerConfig, formats)
- * @param {number} args.duration - top-level video duration in seconds
- * @param {() => Promise<object>} args.onRefresh - called by Layer 1 RELOAD_PLAYER_RESPONSE
- *        and by the visibility/403 fallbacks. Must return a fresh
- *        `availableModes.sabr` object (sessionUrl, ustreamerConfig, formats).
- * @returns {Promise<{ manifestUri: string, dispose: () => void }>}
+ * @param {shaka.Player} args.shakaPlayer attached shaka.Player instance
+ * @param {object} args.sabr response.availableModes.sabr (sessionUrl, ustreamerConfig, cpn, formats)
+ * @param {number} args.duration top-level video duration in seconds
+ * @param {Array} [args.captions] caption tracks
+ * @param {Array} [args.storyboards] storyboard tracks
+ * @param {() => void} [args.onReloadRequested] fired when the SABR server demands a player reload
+ * @returns {{ manifestUri: string, dispose: () => void, onLoaded: () => void }}
  */
-export async function setupSabrPlayer({ shakaPlayer, sabr, duration, onRefresh }) {
-    // Initialise LuanRT's adapter
-    const adapter = new SabrStreamingAdapter({
-        playerAdapter: new ShakaPlayerAdapter(),
-        clientInfo: {
-            clientName: 3, // ANDROID
-            clientVersion: "21.03.36",
-            osName: "Android",
-            osVersion: "15",
-        },
+export function setupSabrPlayer({ shakaPlayer, sabr, duration, captions = [], storyboards = [], onReloadRequested }) {
+    const sabrData = {
+        url: sabr.sessionUrl,
+        poToken: "",
+        ustreamerConfig: sabr.ustreamerConfig,
+        clientInfo: ANDROID_CLIENT_INFO,
+    };
+
+    // Adapt Piped's subtitle shape ({url, code, mimeType, name}) to FreeTube's
+    // SabrManifest caption shape ({id, label, mimeType, language, url}).
+    const adaptedCaptions = (captions || [])
+        .filter(c => c?.url && c?.mimeType)
+        .map(c => ({
+            id: c.code || c.url,
+            label: c.name || c.code || "",
+            mimeType: c.mimeType,
+            language: c.code || "und",
+            url: c.url,
+        }));
+
+    // FreeTube derives presentation duration from the minimum per-format
+    // approxDurationMs — the overall video duration from /player is often
+    // longer than what any single track actually contains, which causes
+    // the audio to cut out before video ends.
+    const perFormatDurationsMs = (sabr.formats || [])
+        .map(f => f.approxDurationMs)
+        .filter(d => typeof d === "number" && d > 0);
+    const trueDuration = perFormatDurationsMs.length > 0 ? Math.min(...perFormatDurationsMs) / 1000 : duration;
+
+    const sabrManifest = {
+        duration: trueDuration,
+        formats: sabr.formats,
+        captions: adaptedCaptions,
+        storyboards,
+    };
+    const manifestUri = "data:" + MANIFEST_TYPE_SABR + "," + encodeURIComponent(JSON.stringify(sabrManifest));
+
+    const videoEl = shakaPlayer.getMediaElement?.();
+    const playerWidth = { value: videoEl?.clientWidth || 1920 };
+    const playerHeight = { value: videoEl?.clientHeight || 1080 };
+
+    let parsedManifest = null;
+    const sabrStream = setupSabrScheme(
+        sabrData,
+        () => shakaPlayer,
+        () => parsedManifest,
+        playerWidth,
+        playerHeight,
+    );
+
+    sabrStream.onBackoffRequested?.(({ backoffMs }) => {
+        console.log(`[SABR] backoff requested: ${Math.round(backoffMs)}ms`);
     });
 
-    // Layer 1 — server-driven proactive refresh. Server tells us the session
-    // is about to expire by including a RELOAD_PLAYER_RESPONSE UMP frame in a
-    // normal response; the adapter fires this callback.
-    let lastRefreshTimestamp = Date.now();
-    const applyRefreshed = freshSabr => {
-        adapter.setStreamingURL(freshSabr.sessionUrl);
-        adapter.setUstreamerConfig(freshSabr.ustreamerConfig);
-        adapter.setServerAbrFormats(freshSabr.formats);
-        lastRefreshTimestamp = Date.now();
-    };
+    sabrStream.onReloadOnce?.(() => {
+        console.log("[SABR] server requested player reload");
+        if (onReloadRequested) onReloadRequested();
+    });
 
-    const refresh = async () => {
+    // See spinnerSuppressStyle above for why. Toggle attribute on each timeupdate
+    // (includes the final tick before `ended` fires, so no need for a separate
+    // ended listener).
+    const sabrContainer = videoEl?.closest?.("[data-shaka-player-container]");
+    const onTimeUpdate = () => {
+        if (!sabrContainer) return;
+        const remaining = (videoEl.duration || 0) - videoEl.currentTime;
+        sabrContainer.toggleAttribute("data-sabr-near-end", videoEl.ended || (remaining >= 0 && remaining < 1.5));
+    };
+    videoEl?.addEventListener("timeupdate", onTimeUpdate);
+
+    const onLoaded = () => {
         try {
-            const fresh = await onRefresh();
-            if (fresh) applyRefreshed(fresh);
-        } catch (err) {
-            console.warn("[SABR] session refresh failed:", err);
+            parsedManifest = shakaPlayer.getManifest?.();
+        } catch (e) {
+            console.warn("[SABR] failed to grab parsed manifest:", e);
         }
     };
-
-    adapter.onReloadPlayerResponse(refresh);
-
-    // Initial state
-    applyRefreshed(sabr);
-    adapter.attach(shakaPlayer);
-
-    // Layer 2 — wake-up check. If the tab was hidden for a long time the
-    // session URL may have expired (signed URLs are ~6h). On visibility
-    // returning, refresh proactively if our last refresh was a long time ago.
-    const SESSION_AGE_THRESHOLD_MS = 5 * 60 * 60 * 1000; // 5h
-    const onVisibilityChange = () => {
-        if (!document.hidden && Date.now() - lastRefreshTimestamp > SESSION_AGE_THRESHOLD_MS) {
-            refresh();
-        }
-    };
-    document.addEventListener("visibilitychange", onVisibilityChange);
-
-    // Layer 3 — hard fallback. If a SABR POST returns 403/410 despite the
-    // proactive paths, the adapter will surface it as a Shaka error which
-    // the caller's existing error handling catches; the caller can then
-    // call dispose() and re-setup. We don't intercept that here because
-    // Shaka's error pipeline already handles network errors uniformly.
-
-    // Build the wrapper MPD from the format list
-    const mpdXml = generate_sabr_dash_file(sabr.formats, duration);
-    const manifestUri = "data:application/dash+xml;charset=utf-8;base64," + btoa(mpdXml);
 
     const dispose = () => {
-        document.removeEventListener("visibilitychange", onVisibilityChange);
+        videoEl?.removeEventListener("timeupdate", onTimeUpdate);
+        sabrContainer?.removeAttribute("data-sabr-near-end");
         try {
-            adapter.dispose?.();
+            sabrStream.cleanup?.();
         } catch (e) {
-            console.warn("[SABR] adapter dispose error:", e);
+            console.warn("[SABR] cleanup error:", e);
         }
     };
 
-    return { manifestUri, dispose };
+    return { manifestUri, dispose, onLoaded };
 }

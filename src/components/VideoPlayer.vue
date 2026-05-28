@@ -102,7 +102,7 @@ const props = defineProps({
     isEmbed: Boolean,
 });
 
-const emit = defineEmits(["timeupdate", "ended", "navigateNext"]);
+const emit = defineEmits(["timeupdate", "ended", "navigateNext", "needsReload"]);
 
 const container = ref(null);
 const videoEl = ref(null);
@@ -368,7 +368,7 @@ function seek(time) {
     }
 }
 
-async function setPlayerAttrs(localPlayer, el, uri, mime, shaka) {
+async function setPlayerAttrs(localPlayer, el, uri, mime, shaka, sabrOnLoaded) {
     const url = "/watch?v=" + props.video.id;
 
     if (!uiInstance) {
@@ -466,7 +466,9 @@ async function setPlayerAttrs(localPlayer, el, uri, mime, shaka) {
     });
 
     const quality = getPreferenceNumber("quality", 0);
-    const qualityConds = quality > 0 && (getAudioStreams().length > 0 || props.video.livestream) && !disableVideo;
+    const hasSelectableVariants =
+        getAudioStreams().length > 0 || (props.video.availableModes?.sabr?.formats?.length ?? 0) > 0;
+    const qualityConds = quality > 0 && (hasSelectableVariants || props.video.livestream) && !disableVideo;
     if (qualityConds) playerInstance.configure("abr.enabled", false);
 
     const time = route.query.t ?? route.query.start;
@@ -503,12 +505,15 @@ async function setPlayerAttrs(localPlayer, el, uri, mime, shaka) {
     playerInstance
         .load(uri, startTime, mime)
         .then(async () => {
-            let lang = "en";
-            const prefLang = getPreferenceString("hl", "en").substr(0, 2);
+            if (sabrOnLoaded) sabrOnLoaded();
+            // Languages may arrive as bare ("en") or BCP-47 ("en-US"); compare on the
+            // first 2 chars on both sides so prefs like "en" match "en-US" tracks.
+            const langShort = s => (s ?? "").substr(0, 2);
+            const prefLang = langShort(getPreferenceString("hl", "en"));
             const audioTracks = playerInstance.getAudioTracks();
-            const audioLanguages = [...new Set(audioTracks.map(t => t.language))];
-            if (audioLanguages.includes(prefLang)) lang = prefLang;
-            const selectedTrack = audioTracks.find(t => t.language === lang);
+            const audioLanguages = [...new Set(audioTracks.map(t => langShort(t.language)))];
+            const lang = audioLanguages.includes(prefLang) ? prefLang : "en";
+            const selectedTrack = audioTracks.find(t => langShort(t.language) === lang);
             if (selectedTrack) playerInstance.selectAudioTrack(selectedTrack);
 
             if (audioLanguages.length > 1) {
@@ -522,34 +527,22 @@ async function setPlayerAttrs(localPlayer, el, uri, mime, shaka) {
             }
 
             if (qualityConds) {
-                var leastDiff = Number.MAX_VALUE;
-                var bestStream = null;
-
-                var bestAudio = 0;
-
                 const tracks = playerInstance
                     .getVariantTracks()
-                    .filter(track => track.language == lang || track.language == "und");
+                    .filter(track => langShort(track.language) === lang || track.language === "und");
 
-                if (quality >= 480)
-                    tracks.forEach(track => {
-                        const audioBandwidth = track.audioBandwidth;
-                        if (audioBandwidth > bestAudio) bestAudio = audioBandwidth;
-                    });
+                const heights = [...new Set(tracks.map(t => t.height).filter(h => h != null))].sort((a, b) => a - b);
+                const atOrBelow = heights.filter(h => h <= quality);
+                const targetHeight = atOrBelow.length > 0 ? atOrBelow[atOrBelow.length - 1] : heights[0];
 
-                tracks
-                    .sort((a, b) => a.bandwidth - b.bandwidth)
-                    .forEach(stream => {
-                        if (stream.audioBandwidth < bestAudio) return;
+                let bestStream = null;
+                if (targetHeight != null) {
+                    bestStream = tracks
+                        .filter(t => t.height === targetHeight)
+                        .reduce((best, t) => (best == null || t.audioBandwidth > best.audioBandwidth ? t : best), null);
+                }
 
-                        const diff = Math.abs(quality - stream.height);
-                        if (diff < leastDiff) {
-                            leastDiff = diff;
-                            bestStream = stream;
-                        }
-                    });
-
-                playerInstance.selectVariantTrack(bestStream, true);
+                if (bestStream) playerInstance.selectVariantTrack(bestStream, true);
             }
 
             await Promise.all(
@@ -638,9 +631,10 @@ async function loadVideo() {
 
     if (useSabr) {
         // SABR path: the manifestUri is built inside the shaka promise callback
-        // below, after Shaka attaches (LuanRT needs the player instance to
-        // register its request/response interceptors). Only mime is set here.
-        mime = "application/dash+xml";
+        // below, once the player instance exists (the SabrSchemePlugin needs
+        // to register with that player's networking engine). MIME is the custom
+        // SABR-manifest MIME the vendored SabrManifestParser is registered for.
+        mime = "application/sabr+json";
     } else if (props.video.livestream) {
         uri = hlsUrl;
         mime = "application/x-mpegURL";
@@ -732,28 +726,25 @@ async function loadVideo() {
             localPlayer.configure("streaming.bufferingGoal", Math.max(getPreferenceNumber("bufferGoal", 10), 10));
             localPlayer.configure("streaming.bufferBehind", 300);
 
-            // SABR: build the wrapper MPD now that the player exists, then load it.
-            // LuanRT bundle is lazy-imported only when SABR is active so non-SABR
-            // users don't pay the bundle cost.
+            // SABR: build a SabrManifest JSON, register the SabrSchemePlugin
+            // (FreeTube-style), and hand the data: URI to Shaka. The SABR bundle
+            // is lazy-imported only when SABR is active so non-SABR users don't
+            // pay the bundle cost.
             let pendingSabrDispose = null;
+            let pendingSabrOnLoaded = null;
             if (useSabr) {
                 try {
                     const { setupSabrPlayer } = await import("../utils/sabr/setupSabrPlayer.js");
-                    const refreshSession = async () => {
-                        const { apiUrl, fetchJson } = await import("@/composables/useApi.js");
-                        const fresh = await fetchJson(apiUrl() + "/streams/" + props.video.id, null, {
-                            cache: "no-store",
-                        });
-                        return fresh?.availableModes?.sabr;
-                    };
-                    const setup = await setupSabrPlayer({
+                    const setup = setupSabrPlayer({
                         shakaPlayer: localPlayer,
                         sabr: sabrBlock,
                         duration: props.video.duration,
-                        onRefresh: refreshSession,
+                        captions: props.video.subtitles || [],
+                        onReloadRequested: () => emit("needsReload"),
                     });
                     uri = setup.manifestUri;
                     pendingSabrDispose = setup.dispose;
+                    pendingSabrOnLoaded = setup.onLoaded;
                 } catch (err) {
                     console.error("[SABR] setup failed:", err);
                     error.value = 1;
@@ -761,7 +752,7 @@ async function loadVideo() {
                 }
             }
 
-            setPlayerAttrs(localPlayer, el, uri, mime, shakaLib);
+            setPlayerAttrs(localPlayer, el, uri, mime, shakaLib, pendingSabrOnLoaded);
             if (pendingSabrDispose) sabrDispose = pendingSabrDispose;
         });
     else setPlayerAttrs(playerInstance, el, uri, mime, shakaLib);
