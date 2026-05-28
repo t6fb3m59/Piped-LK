@@ -117,9 +117,16 @@ export function setupSabrPlayer({
     // teardown, no seek, buffered media keeps playing. Re-arm after each
     // success since onReloadOnce only fires once. If anything fails, hand off
     // to the caller for a full player rebuild.
+    //
+    // A flat 1s delay before each attempt keeps a persistently-failing session
+    // (e.g. a transient backend/YouTube outage) from turning into a request
+    // storm — the reload loop is otherwise ungated and fires as fast as
+    // /streams responds.
+    const RELOAD_BACKOFF_MS = 1000;
     const armReload = () => {
         sabrStream.onReloadOnce?.(async () => {
             console.log("[SABR] session reload requested");
+            await new Promise(resolve => setTimeout(resolve, RELOAD_BACKOFF_MS));
             try {
                 const fresh = fetchFreshSabr ? await fetchFreshSabr() : null;
                 if (!fresh?.sessionUrl) throw new Error("no fresh SABR session");
