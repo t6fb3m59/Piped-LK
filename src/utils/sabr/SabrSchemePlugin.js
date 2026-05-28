@@ -8,6 +8,12 @@
 //   - The `SabrData` JSDoc reference to `../../views/Watch/Watch` is left as-is
 //     for documentation purposes; the actual shape is documented in Piped's
 //     setupSabrPlayer.js where SabrData is constructed.
+//   - Minimum 100ms floor on the inter-retry backoff (see doRequest below).
+//     Upstream only delays when nextRequestPolicy.backoffTimeMs > 0, so when
+//     YouTube returns NEXT_REQUEST_POLICY with backoffTimeMs=0 the recursive
+//     doRequest fires with no delay — ~100 iterations in <1s before the retry
+//     cap triggers a reload, generating ~200 cross-origin round-trips. The
+//     floor turns those into ~10 retries spread over ~1s.
 
 import { base64ToU8, concatenateChunks, EventEmitterLike, MAX_INT32_VALUE } from "googlevideo/utils";
 import { CompositeBuffer, UmpReader } from "googlevideo/ump";
@@ -326,13 +332,22 @@ async function doRequest(operationInputs, currentState) {
     }
 
     try {
+        // Local fix: enforce a minimum delay (100ms) between recursive retries
+        // even when the server says backoffTimeMs=0. Without this floor, the
+        // recursive doRequest in the shouldRetry path can fire ~100 times in
+        // well under a second before the retry-cap triggers reload, generating
+        // ~200 network round-trips (1 OPTIONS + 1 POST each). This is a bug
+        // in upstream FreeTube too; they just rarely see it because YouTube
+        // usually returns non-zero backoffTimeMs.
+        const MIN_BACKOFF_MS = 100;
         let shouldReloadDueToBackoffLoop = false;
-        if ((currentState.sabrStreamState.nextRequestPolicy?.backoffTimeMs || 0) > 0) {
-            const currentBackoffTimeMs = currentState.sabrStreamState.nextRequestPolicy.backoffTimeMs;
-            currentState.eventEmitter.emit("backoff-requested", { backoffMs: currentBackoffTimeMs });
+        const policyBackoffMs = currentState.sabrStreamState.nextRequestPolicy?.backoffTimeMs || 0;
+        const effectiveBackoffMs = policyBackoffMs > 0 ? policyBackoffMs : MIN_BACKOFF_MS;
+        if (currentState.sabrStreamState.nextRequestPolicy || policyBackoffMs > 0) {
+            currentState.eventEmitter.emit("backoff-requested", { backoffMs: effectiveBackoffMs });
             // Wait but can be aborted
             await new Promise((resolve, reject) => {
-                setTimeout(resolve, currentBackoffTimeMs);
+                setTimeout(resolve, effectiveBackoffMs);
                 currentState.abortController.signal.addEventListener("abort", reject);
             });
             // Must reset AFTER waiting to avoid requested aborted
@@ -340,13 +355,13 @@ async function doRequest(operationInputs, currentState) {
             // i.e. backoff time parts received will not reset timeout - counted as video loading issue
             currentState.timeoutController?.resetTimeoutOnce();
 
-            currentState.cumulativeBackOffTimeMs += currentState.sabrStreamState.nextRequestPolicy.backoffTimeMs;
+            currentState.cumulativeBackOffTimeMs += effectiveBackoffMs;
             currentState.cumulativeBackOffRequested += 1;
             const timeoutMs = operationInputs.request.retryParameters.timeout;
             // Detect infinite backoff loop by no. of times requested and cumulative time approaching timeout
             if (
                 currentState.cumulativeBackOffRequested >= 3 ||
-                (timeoutMs > 0 && timeoutMs <= currentState.cumulativeBackOffTimeMs + currentBackoffTimeMs)
+                (timeoutMs > 0 && timeoutMs <= currentState.cumulativeBackOffTimeMs + effectiveBackoffMs)
             ) {
                 shouldReloadDueToBackoffLoop = true;
             }
