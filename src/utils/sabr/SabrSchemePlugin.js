@@ -38,6 +38,8 @@ const deepCopy = v => structuredClone(v);
 const AbortableOperation = shaka.util.AbortableOperation;
 const ShakaError = shaka.util.Error;
 
+const MAX_SABR_REDIRECTS = 3;
+
 /**
  * @typedef OperationInputs
  * @type {object}
@@ -82,6 +84,7 @@ const ShakaError = shaka.util.Error;
  * @property {?NextRequestPolicy} nextRequestPolicy
  * @property {boolean} playerReloadRequested
  * @property {number} requestNumber
+ * @property {number} redirectCount
  */
 /**
  * @typedef TimeoutController
@@ -415,12 +418,18 @@ async function doRequest(operationInputs, currentState) {
                     }
                     case UMPPartId.SABR_REDIRECT: {
                         const sabrRedirect = decodePart(part, SabrRedirect);
-                        if (!sabrRedirect) break;
+                        if (!sabrRedirect?.url) break;
 
                         currentState.sabrStreamState.playerReloadRequested = true;
                         if (!currentState.abortController.signal.aborted) {
                             currentState.abortController.abort();
-                            currentState.eventEmitter.emit("reload");
+                            if (currentState.sabrStreamState.redirectCount >= MAX_SABR_REDIRECTS) {
+                                currentState.eventEmitter.emit("reload");
+                            } else {
+                                currentState.sabrStreamState.redirectCount += 1;
+                                const cpn = new URL(currentState.sabrStreamState.sabrUrl).searchParams.get("cpn");
+                                currentState.eventEmitter.emit("redirect", { url: sabrRedirect.url, cpn });
+                            }
                         }
                         break;
                     }
@@ -456,6 +465,7 @@ async function doRequest(operationInputs, currentState) {
                     case UMPPartId.MEDIA_END: {
                         if (mediaHeaderId === part.data.getUint8(0)) {
                             segmentComplete = true;
+                            currentState.sabrStreamState.redirectCount = 0;
                             currentState.abortStatus.finished = true;
                             currentState.abortController.abort();
                         }
@@ -714,6 +724,7 @@ export function setupSabrScheme(sabrData, getPlayer, getManifest, playerWidth, p
         nextRequestPolicy: undefined,
         playerReloadRequested: false,
         requestNumber: 0,
+        redirectCount: 0,
     };
 
     shaka.net.NetworkingEngine.registerScheme(
@@ -949,8 +960,14 @@ export function setupSabrScheme(sabrData, getPlayer, getManifest, playerWidth, p
         sabrStreamState.activeSabrContextTypes.clear();
         sabrStreamState.sabrContexts.clear();
         sabrStreamState.requestNumber = 0;
+        sabrStreamState.redirectCount = 0;
         if (ustreamerConfig) videoPlaybackUstreamerConfig = base64ToU8(ustreamerConfig);
         initDataCache.clear();
+    };
+
+    const applyRedirect = ({ sessionUrl }) => {
+        sabrStreamState.sabrUrl = sessionUrl;
+        sabrStreamState.playerReloadRequested = false;
     };
 
     return {
@@ -960,7 +977,11 @@ export function setupSabrScheme(sabrData, getPlayer, getManifest, playerWidth, p
         onReloadOnce(callback) {
             eventEmitter.once("reload", callback);
         },
+        onRedirectOnce(callback) {
+            eventEmitter.once("redirect", callback);
+        },
         refreshSession,
+        applyRedirect,
         cleanup,
     };
 }

@@ -58,6 +58,7 @@ export function setupSabrPlayer({
     captions = [],
     storyboards = [],
     fetchFreshSabr,
+    resolveSabrRedirect,
     onReloadFailed,
 }) {
     const sabrData = {
@@ -156,6 +157,24 @@ export function setupSabrPlayer({
         });
     };
     armReload();
+
+    const armRedirect = () => {
+        sabrStream.onRedirectOnce?.(async ({ url, cpn }) => {
+            console.log("[SABR] redirect requested");
+            try {
+                const signed = resolveSabrRedirect ? await resolveSabrRedirect(url, cpn) : null;
+                if (disposed) return;
+                if (!signed) throw new Error("no signed redirect URL");
+                sabrStream.applyRedirect?.({ sessionUrl: signed });
+                armRedirect();
+                shakaPlayer.retryStreaming?.();
+            } catch (e) {
+                console.warn("[SABR] redirect follow failed, switching to session reload:", e);
+                runReload();
+            }
+        });
+    };
+    armRedirect();
 
     // See spinnerSuppressStyle above for why. Toggle attribute on each timeupdate
     // (includes the final tick before `ended` fires, so no need for a separate

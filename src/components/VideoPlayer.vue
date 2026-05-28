@@ -748,6 +748,13 @@ async function loadVideo() {
                             const data = await fetchJson(apiUrl() + "/streams/" + props.video.id);
                             return data?.availableModes?.sabr;
                         },
+                        resolveSabrRedirect: async (url, cpn) => {
+                            const params = new URLSearchParams({ url });
+                            if (cpn) params.set("cpn", cpn);
+                            const resp = await fetch(apiUrl() + "/sabr/redirect?" + params.toString());
+                            if (!resp.ok) throw new Error("sabr redirect resolve failed: " + resp.status);
+                            return (await resp.text()).trim();
+                        },
                         onReloadFailed: () => {
                             error.value = 1;
                         },
