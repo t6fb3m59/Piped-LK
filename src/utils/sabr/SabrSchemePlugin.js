@@ -332,22 +332,14 @@ async function doRequest(operationInputs, currentState) {
     }
 
     try {
-        // Local fix: enforce a minimum delay (100ms) between recursive retries
-        // even when the server says backoffTimeMs=0. Without this floor, the
-        // recursive doRequest in the shouldRetry path can fire ~100 times in
-        // well under a second before the retry-cap triggers reload, generating
-        // ~200 network round-trips (1 OPTIONS + 1 POST each). This is a bug
-        // in upstream FreeTube too; they just rarely see it because YouTube
-        // usually returns non-zero backoffTimeMs.
         const MIN_BACKOFF_MS = 100;
         let shouldReloadDueToBackoffLoop = false;
         const policyBackoffMs = currentState.sabrStreamState.nextRequestPolicy?.backoffTimeMs || 0;
-        const effectiveBackoffMs = policyBackoffMs > 0 ? policyBackoffMs : MIN_BACKOFF_MS;
-        if (currentState.sabrStreamState.nextRequestPolicy || policyBackoffMs > 0) {
-            currentState.eventEmitter.emit("backoff-requested", { backoffMs: effectiveBackoffMs });
+        if (policyBackoffMs > 0) {
+            currentState.eventEmitter.emit("backoff-requested", { backoffMs: policyBackoffMs });
             // Wait but can be aborted
             await new Promise((resolve, reject) => {
-                setTimeout(resolve, effectiveBackoffMs);
+                setTimeout(resolve, policyBackoffMs);
                 currentState.abortController.signal.addEventListener("abort", reject);
             });
             // Must reset AFTER waiting to avoid requested aborted
@@ -355,16 +347,27 @@ async function doRequest(operationInputs, currentState) {
             // i.e. backoff time parts received will not reset timeout - counted as video loading issue
             currentState.timeoutController?.resetTimeoutOnce();
 
-            currentState.cumulativeBackOffTimeMs += effectiveBackoffMs;
+            currentState.cumulativeBackOffTimeMs += policyBackoffMs;
             currentState.cumulativeBackOffRequested += 1;
             const timeoutMs = operationInputs.request.retryParameters.timeout;
             // Detect infinite backoff loop by no. of times requested and cumulative time approaching timeout
             if (
                 currentState.cumulativeBackOffRequested >= 3 ||
-                (timeoutMs > 0 && timeoutMs <= currentState.cumulativeBackOffTimeMs + effectiveBackoffMs)
+                (timeoutMs > 0 && timeoutMs <= currentState.cumulativeBackOffTimeMs + policyBackoffMs)
             ) {
                 shouldReloadDueToBackoffLoop = true;
             }
+        } else if (currentState.cumulativeRetryDueToNextRequestPolicy > 0) {
+            // Local fix: we're retrying with no server-specified backoff. Floor the
+            // gap to 100ms so the recursive doRequest can't spin into a subsecond
+            // request storm (upstream FreeTube has this bug — they rarely see it
+            // because YouTube usually sends a non-zero backoffTimeMs). Only applies
+            // mid-retry: a normal first fetch (cumulativeRetry === 0) is untouched,
+            // so steady-state playback keeps its zero-delay flow control.
+            await new Promise((resolve, reject) => {
+                setTimeout(resolve, MIN_BACKOFF_MS);
+                currentState.abortController.signal.addEventListener("abort", reject);
+            });
         }
         if (shouldReloadDueToBackoffLoop || currentState.cumulativeRetryDueToNextRequestPolicy >= 100) {
             // Fire fake reload event due to detecting retry loop
