@@ -23,6 +23,26 @@ All are multi-arch (`linux/amd64`, `linux/arm64`).
   implementation, updates frequently, and may break without warning. That
   said, **SABR is currently usable** on it.
 
+## Features
+
+Changes this fork adds on top of upstream Piped:
+
+**`latest` (stable)**
+
+- Fixed saved positions for videos
+- Fixed seeking breaking on itag-18 videos
+- Fixed wrong view counts and missing upload dates on channel videos
+- Removed the blue box around the video on Firefox
+- Cut the long delay before videos start playing on Firefox
+- Made player shortcuts (space / arrow keys) work in fullscreen
+- Configurable subscription-feed updating: toggle WebSub, optional periodic refresh (see [Environment variables](#environment-variables))
+
+**`experimental`**
+
+Everything in `latest`, plus:
+
+- SABR streaming support: restores full quality selection (720p, 1080p, 4K) instead of the 360p cap (see [What is SABR?](#what-is-sabr))
+
 ## What is SABR?
 
 SABR (Server-Adaptive BitRate) is YouTube's newer streaming protocol. Instead
@@ -40,6 +60,16 @@ resolutions in the quality menu, regardless of what the video actually offers.
 Implementing SABR is what restores full quality selection (720p, 1080p, 4K,
 separate audio tracks, etc.) as YouTube tightens this transition, hence the
 `experimental` branch.
+
+## Environment variables
+
+Extra environment variables this fork adds, set on the backend (`logicalkarma/piped`) container:
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `DISABLE_PUBSUB` | `false` | Stop subscribing to YouTube's WebSub hub, so the backend no longer receives push notifications of new uploads from subscribed channels. |
+| `FEED_REFRESH` | `false` | Enable a background job that periodically refreshes the videos of every subscribed channel, as an alternative to WebSub. |
+| `FEED_REFRESH_MINUTES` | `15` | With `FEED_REFRESH` enabled, the window over which all subscribed channels are refreshed, evenly spaced. |
 
 ## Credits
 
