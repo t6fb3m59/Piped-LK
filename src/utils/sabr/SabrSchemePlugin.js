@@ -74,6 +74,7 @@ const MAX_SABR_REDIRECTS = 3;
  * @property {number} cumulativeBackOffTimeMs
  * @property {number} cumulativeBackOffRequested
  * @property {number} cumulativeRetryDueToNextRequestPolicy
+ * @property {(url: string, cpn: ?string) => Promise<string>} resolveSabrRedirect
  */
 /**
  * @typedef SabrStreamState
@@ -314,6 +315,8 @@ function createTimeoutController(callback, timeoutMs) {
  */
 async function doRequest(operationInputs, currentState) {
     let response;
+    /** @type {ReadableStreamDefaultReader | null} */
+    let reader = null;
     /** @type {CompositeBuffer | null} */
     let chunkedDataBuffer = null;
     /** @type {Uint8Array[]} */
@@ -324,6 +327,8 @@ async function doRequest(operationInputs, currentState) {
 
     let invalidPoToken = false;
     let error;
+    /** @type {?string} */
+    let pendingRedirectUrl = null;
 
     if (currentState.sabrStreamState.playerReloadRequested) {
         // Multiple requests might be issued at the same time, other requests should abort themselves once reload requested
@@ -390,7 +395,7 @@ async function doRequest(operationInputs, currentState) {
         const { itag, lastModified, xtags } = formatIdFromString(operationInputs.formatIdString);
         let mediaHeaderId;
 
-        const reader = response.body.getReader();
+        reader = response.body.getReader();
         let readObj = await reader.read();
 
         while (!readObj.done && !currentState.abortStatus.finished) {
@@ -420,16 +425,16 @@ async function doRequest(operationInputs, currentState) {
                         const sabrRedirect = decodePart(part, SabrRedirect);
                         if (!sabrRedirect?.url) break;
 
-                        currentState.sabrStreamState.playerReloadRequested = true;
-                        if (!currentState.abortController.signal.aborted) {
-                            currentState.abortController.abort();
-                            if (currentState.sabrStreamState.redirectCount >= MAX_SABR_REDIRECTS) {
+                        if (currentState.sabrStreamState.redirectCount >= MAX_SABR_REDIRECTS) {
+                            currentState.sabrStreamState.playerReloadRequested = true;
+                            if (!currentState.abortController.signal.aborted) {
+                                currentState.abortController.abort();
                                 currentState.eventEmitter.emit("reload");
-                            } else {
-                                currentState.sabrStreamState.redirectCount += 1;
-                                const cpn = new URL(currentState.sabrStreamState.sabrUrl).searchParams.get("cpn");
-                                currentState.eventEmitter.emit("redirect", { url: sabrRedirect.url, cpn });
                             }
+                        } else {
+                            currentState.sabrStreamState.redirectCount += 1;
+                            pendingRedirectUrl = sabrRedirect.url;
+                            currentState.abortStatus.finished = true;
                         }
                         break;
                     }
@@ -609,6 +614,31 @@ async function doRequest(operationInputs, currentState) {
             fromCache: false,
             originalRequest: operationInputs.request,
         };
+    } else if (pendingRedirectUrl) {
+        await reader?.cancel()?.catch(() => {});
+
+        let signed = null;
+        try {
+            const cpn = new URL(currentState.sabrStreamState.sabrUrl).searchParams.get("cpn");
+            signed = currentState.resolveSabrRedirect
+                ? await currentState.resolveSabrRedirect(pendingRedirectUrl, cpn)
+                : null;
+        } catch {
+            signed = null;
+        }
+
+        if (signed) {
+            currentState.sabrStreamState.sabrUrl = signed;
+            currentState.abortStatus.finished = false;
+            return doRequest(operationInputs, currentState);
+        }
+
+        throw createRecoverableNetworkError(
+            ShakaError.Code.HTTP_ERROR,
+            operationInputs.uri,
+            new Error("SABR redirect resolve failed"),
+            operationInputs.requestType,
+        );
     } else if (shouldRetry) {
         if (shouldRetryDueToNextRequestPolicy) {
             // Only count on actual retry to avoid counting false positive (when segmentComplete
@@ -701,7 +731,7 @@ async function doRequest(operationInputs, currentState) {
  * @param {import('vue').ComputedRef<number>} playerHeight
  * @return SabrStream
  */
-export function setupSabrScheme(sabrData, getPlayer, getManifest, playerWidth, playerHeight) {
+export function setupSabrScheme(sabrData, getPlayer, getManifest, playerWidth, playerHeight, resolveSabrRedirect) {
     const eventEmitter = new EventEmitterLike();
 
     /**
@@ -923,6 +953,7 @@ export function setupSabrScheme(sabrData, getPlayer, getManifest, playerWidth, p
                 cumulativeBackOffTimeMs: 0,
                 cumulativeBackOffRequested: 0,
                 cumulativeRetryDueToNextRequestPolicy: 0,
+                resolveSabrRedirect,
             };
 
             const pendingRequest = doRequest(opInputs, currentState);
@@ -965,11 +996,6 @@ export function setupSabrScheme(sabrData, getPlayer, getManifest, playerWidth, p
         initDataCache.clear();
     };
 
-    const applyRedirect = ({ sessionUrl }) => {
-        sabrStreamState.sabrUrl = sessionUrl;
-        sabrStreamState.playerReloadRequested = false;
-    };
-
     return {
         onBackoffRequested(callback) {
             eventEmitter.on("backoff-requested", callback);
@@ -977,11 +1003,7 @@ export function setupSabrScheme(sabrData, getPlayer, getManifest, playerWidth, p
         onReloadOnce(callback) {
             eventEmitter.once("reload", callback);
         },
-        onRedirectOnce(callback) {
-            eventEmitter.once("redirect", callback);
-        },
         refreshSession,
-        applyRedirect,
         cleanup,
     };
 }
