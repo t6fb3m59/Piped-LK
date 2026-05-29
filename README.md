@@ -16,7 +16,7 @@ All are multi-arch (`linux/amd64`, `linux/arm64`).
 
 ## What each tag is for
 
-- **`latest`** tracks upstream Piped closely — only tame or genuinely-needed
+- **`latest`** tracks upstream Piped closely: only tame or genuinely-needed
   changes on top of upstream, nothing experimental.
 - **`experimental`** is where SABR (YouTube's Server-Adaptive BitRate
   streaming) is being implemented. This branch leans **heavily on Claude** for
@@ -32,25 +32,25 @@ session: the client asks for ranges and the server decides what media chunks
 to send back, in a custom binary wire format.
 
 YouTube has been progressively forcing clients onto SABR. Without support for
-it, the only stream that still plays is **itag 18** — the legacy "progressive"
+it, the only stream that still plays is **itag 18**, the legacy "progressive"
 format: a single combined audio+video MP4 capped at **360p**. So on a client
 that can't do SABR, the user sees every video locked to 360p with no higher
 resolutions in the quality menu, regardless of what the video actually offers.
 
 Implementing SABR is what restores full quality selection (720p, 1080p, 4K,
-separate audio tracks, etc.) as YouTube tightens this transition — hence the
+separate audio tracks, etc.) as YouTube tightens this transition, hence the
 `experimental` branch.
 
 ## Credits
 
 The SABR implementation here stands on the shoulders of the projects that
-pioneered FOSS SABR support — huge thanks to them:
+pioneered FOSS SABR support. Huge thanks to them:
 
-- **[FreeTube](https://github.com/FreeTubeApp/FreeTube)** (MIT) — the SABR
+- **[FreeTube](https://github.com/FreeTubeApp/FreeTube)** (MIT): the SABR
   manifest parser, Shaka scheme plugin, and MP4/WebM segment-index parsers
   under [`src/utils/sabr/`](src/utils/sabr/) are vendored from FreeTube with
   minor local adaptations. Attribution headers are kept in each file.
-- **[googlevideo](https://github.com/LuanRT/googlevideo)** by **LuanRT** — the
+- **[googlevideo](https://github.com/LuanRT/googlevideo)** by **LuanRT**: the
   library that actually speaks YouTube's UMP/SABR wire protocol; everything
   above builds on it.
 
