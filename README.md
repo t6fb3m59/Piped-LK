@@ -33,7 +33,6 @@ Changes this fork adds on top of upstream Piped:
 
 - Fixed saved positions for videos
 - Fixed seeking breaking on itag-18 videos
-- Fixed wrong view counts and missing upload dates on channel videos
 - Removed the blue box around the video on Firefox
 - Cut the long delay before videos start playing on Firefox
 - Made player shortcuts (space / arrow keys) work in fullscreen
