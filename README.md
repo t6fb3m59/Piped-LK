@@ -2,6 +2,8 @@
 
 A personal fork of [Piped](#piped) (upstream README preserved below). This fork will either be integrated upstream or made into a fully fledged fork at a later date. I am struggling to decide which is better/ possible and do not have time at the moment for either.
 
+Update: I have started moving the fixes upstream. SABR will likely be the last and take longer.
+
 ## Where to find the images
 
 Images are published to Docker Hub under `logicalkarma/`:
